@@ -1,0 +1,6 @@
+*.bin
+*.d
+*.elf
+*.map
+*.o
+.*.swp
