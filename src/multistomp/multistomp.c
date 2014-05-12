@@ -1,5 +1,5 @@
 /*
- * This file is part of the libopencm3 project.
+ * This file is part of the multistomp project.
  *
  * Copyright (C) 2014 Daniel Thompson <daniel@redfelineninja.org.uk>
  *
@@ -17,6 +17,7 @@
  * along with this library.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <libopencm3/stm32/rcc.h>
@@ -335,8 +336,6 @@ static void usbmidi_data_rx_cb(usbd_device *usbd_dev, uint8_t ep)
 		while (usbd_ep_write_packet(usbd_dev, 0x81, sysex_identity,
 					    sizeof(sysex_identity)) == 0);
 	}
-
-	gpio_toggle(GPIOA, GPIO4);
 }
 
 static void usbmidi_set_config(usbd_device *usbd_dev, uint16_t wValue)
@@ -348,7 +347,7 @@ static void usbmidi_set_config(usbd_device *usbd_dev, uint16_t wValue)
 	usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, NULL);
 }
 
-static void button_send_event(usbd_device *usbd_dev, int button, int pressed)
+static void button_send_event(usbd_device *usbd_dev, int button, bool pressed)
 {
 	char buf[4] = { 0x08, /* USB framing: virtual cable 0, note off */
 			0x80, /* MIDI command: note off, channel 1 */
@@ -372,6 +371,7 @@ static void button_poll(usbd_device *usbd_dev)
 
 	int i;
 	const uint32_t pin[4] = { GPIO8, GPIO9, GPIO10, GPIO3 };
+	const uint32_t led[4] = { GPIO4, GPIO5, GPIO6, GPIO7 };
 
 
 	for (i=0; i<4; i++) {
@@ -382,7 +382,13 @@ static void button_poll(usbd_device *usbd_dev)
 		button_state[i] =
 		    (button_state[i] << 1) | !(GPIOA_IDR & pin[i]);
 		if ((0 == button_state[i]) != (0 == old_button_state)) {
-			button_send_event(usbd_dev, i, !!button_state[i]);
+			if (button_state[i]) {
+				gpio_set(GPIOA, led[i]);
+				button_send_event(usbd_dev, i, true);
+			} else {
+				gpio_clear(GPIOA, led[i]);
+				button_send_event(usbd_dev, i, false);
+			}
 		}
 	}
 }
@@ -423,9 +429,9 @@ int main(void)
 	rcc_periph_clock_enable(RCC_GPIOA);
 	rcc_periph_clock_enable(RCC_GPIOB);
 
-	gpio_clear(GPIOA, GPIO4);
+	gpio_clear(GPIOA, GPIO4 | GPIO5 | GPIO6 | GPIO7);
 	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ,
-		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO4);
+		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO4 | GPIO5 | GPIO6 | GPIO7);
 
 	/* Button pin */
 	gpio_set(GPIOA, GPIO8 | GPIO9 | GPIO10 | GPIO3);
@@ -446,8 +452,6 @@ int main(void)
 	gpio_set(GPIOB, GPIO8);
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ,
 		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO8);
-
-	gpio_set(GPIOA, GPIO4);
 
 	while (1) {
 		usbd_poll(usbd_dev);
