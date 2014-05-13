@@ -28,6 +28,8 @@
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/cm3/systick.h>
+#include <librfn/fibre.h>
+#include <librfn/time.h>
 
 /*
  * All references in this file come from Universal Serial Bus Device Class
@@ -393,36 +395,43 @@ static void button_poll(usbd_device *usbd_dev)
 	}
 }
 
-static usbd_device *usbd_timer;
+static usbd_device *usbd_dev;
 
-static void timer_init(usbd_device *usbd_dev)
+static int button_fibre(fibre_t *fibre)
 {
-	/* store for use by the tick handler */
-	usbd_timer = usbd_dev;
+	static uint32_t time;
 
-	/* 72MHz / 8 => 9000000 counts per second */
-	systick_set_clocksource(STK_CSR_CLKSOURCE_AHB_DIV8);
+	PT_BEGIN_FIBRE(fibre);
 
-	/* 9000000/9000 = 1000 overflows per second - every 1ms one interrupt */
-	/* SysTick interrupt every N clock pulses: set reload to N-1 */
-	systick_set_reload(8999);
+	time = time_now();
 
-	systick_interrupt_enable();
+	while (true) {
+		button_poll(usbd_dev);
 
-	/* Start counting. */
-	systick_counter_enable();
+		time += 1000;
+		PT_WAIT_UNTIL(fibre_timeout(time));
+	}
+
+	PT_END();
 }
+static fibre_t button_task = FIBRE_VAR_INIT(button_fibre);
 
-void sys_tick_handler(void)
+static int usb_fibre(fibre_t *fibre)
 {
-	button_poll(usbd_timer);
+	PT_BEGIN_FIBRE(fibre);
+
+	while (true) {
+		usbd_poll(usbd_dev);
+		PT_YIELD();
+	}
+
+	PT_END();
 }
+static fibre_t usb_task = FIBRE_VAR_INIT(usb_fibre);
 
 int main(void)
 {
 	int i;
-
-	usbd_device *usbd_dev;
 
 	rcc_clock_setup_in_hsi_out_48mhz();
 
@@ -443,17 +452,20 @@ int main(void)
 			usbd_control_buffer, sizeof(usbd_control_buffer));
 	usbd_register_set_config_callback(usbd_dev, usbmidi_set_config);
 
-	timer_init(usbd_dev);
+	time_init();
 
 	for (i = 0; i < 0x800000; i++)
 		__asm__("nop");
+
+	/* prepare the scheduler */
+	fibre_run(&usb_task);
+	fibre_run(&button_task);
 
 	/* assert hotplug */
 	gpio_set(GPIOB, GPIO8);
 	gpio_set_mode(GPIOB, GPIO_MODE_OUTPUT_2_MHZ,
 		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO8);
 
-	while (1) {
-		usbd_poll(usbd_dev);
-	}
+	fibre_scheduler_main_loop();
+	return 0;
 }

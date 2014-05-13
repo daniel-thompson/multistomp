@@ -11,5 +11,13 @@
 
 LIBRFN_DIR = ../../librfn
 
+OBJS += \
+	fibre.o \
+	fibre_default.o \
+	list.o \
+	messageq.o \
+	time_libopencm3.o \
+	util.o
+
 vpath %.c $(LIBRFN_DIR)/lib
 CPPFLAGS += -I$(LIBRFN_DIR)/include
