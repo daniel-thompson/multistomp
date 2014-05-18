@@ -20,4 +20,5 @@ OBJS += \
 	util.o
 
 vpath %.c $(LIBRFN_DIR)/lib
+CPPFLAGS += -DNDEBUG
 CPPFLAGS += -I$(LIBRFN_DIR)/include
