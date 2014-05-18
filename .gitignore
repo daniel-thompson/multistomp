@@ -5,3 +5,4 @@
 *.o
 .*.swp
 README.html
+cscope.out

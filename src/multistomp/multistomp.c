@@ -30,6 +30,7 @@
 #include <libopencm3/cm3/systick.h>
 #include <librfn/fibre.h>
 #include <librfn/time.h>
+#include <librfn/util.h>
 
 /*
  * All references in this file come from Universal Serial Bus Device Class
@@ -349,22 +350,27 @@ static void usbmidi_set_config(usbd_device *usbd_dev, uint16_t wValue)
 	usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, NULL);
 }
 
-static void button_send_event(usbd_device *usbd_dev, int button, bool pressed)
+static int button_send_event(usbd_device *usbd_dev, int button, bool pressed)
 {
-	char buf[4] = { 0x08, /* USB framing: virtual cable 0, note off */
-			0x80, /* MIDI command: note off, channel 1 */
-			60,   /* Note 60 (middle C) */
-			64,   /* "Normal" velocity */
+	char buf[4] = { 0x0b, /* USB framing: virtual cable 0, control change */
+			0xb0, /* MIDI command: control change, channel 1 */
+			80,   /* General purpose #5 (switch) */
 	};
 
-	// change to note on (if pressed is true)
-	buf[0] |= pressed;
-	buf[1] |= pressed << 4;
-
-	// change the note issued
+	// change the CC affect issued
 	buf[2] += button;
 
-	while (usbd_ep_write_packet(usbd_dev, 0x81, buf, sizeof(buf)) == 0);
+	// Set value of CC (pressed or not pressed)
+	buf[3] = 0x7f * pressed;
+
+	uint32_t t = time_now() + 100000;
+	while (usbd_ep_write_packet(usbd_dev, 0x81, buf, sizeof(buf)) == 0) {
+		if (cyclecmp32(t, time_now()) < 0) {
+			return -1;
+		}
+	}
+
+	return 0;
 }
 
 static void button_poll(usbd_device *usbd_dev)
@@ -384,12 +390,17 @@ static void button_poll(usbd_device *usbd_dev)
 		button_state[i] =
 		    (button_state[i] << 1) | !(GPIOA_IDR & pin[i]);
 		if ((0 == button_state[i]) != (0 == old_button_state)) {
+			/* blink light until we manage to send data */
+			do {
+				gpio_toggle(GPIOA, led[i]);
+			} while (0 != button_send_event(usbd_dev, i,
+							!!button_state[i]));
+
+			/* ensure the LED has the right state */
 			if (button_state[i]) {
 				gpio_set(GPIOA, led[i]);
-				button_send_event(usbd_dev, i, true);
 			} else {
 				gpio_clear(GPIOA, led[i]);
-				button_send_event(usbd_dev, i, false);
 			}
 		}
 	}
@@ -416,9 +427,50 @@ static int button_fibre(fibre_t *fibre)
 }
 static fibre_t button_task = FIBRE_VAR_INIT(button_fibre);
 
+struct wiggle_data {
+	fibre_t fibre;
+	int i;
+	int32_t time;
+};
+
+/*!
+ * Show a "splash screen" by wiggling the LEDs
+ */
+static int wiggle_fibre(fibre_t *fibre)
+{
+	const uint32_t sequence[] = { GPIO5, GPIO4, GPIO5, GPIO6,
+				      GPIO7, GPIO6, GPIO5 };
+	struct wiggle_data *d = containerof(fibre, struct wiggle_data, fibre);
+
+	PT_BEGIN_FIBRE(fibre);
+
+	d->time = time_now();
+	for (d->i = 0; d->i < 16; d->i++) {
+		int p = d->i % 6;
+		gpio_set(GPIOA, sequence[p+1]);
+		gpio_clear(GPIOA, sequence[p]);
+
+		d->time += 100000;
+		PT_WAIT_UNTIL(fibre_timeout(d->time));
+	}
+
+	gpio_clear(GPIOA, GPIO4 | GPIO5 | GPIO6 | GPIO7);
+	fibre_run(&button_task);
+
+	PT_END();
+}
+static struct wiggle_data wiggle_task = {
+	.fibre = FIBRE_VAR_INIT(wiggle_fibre)
+};
+
 static int usb_fibre(fibre_t *fibre)
 {
 	PT_BEGIN_FIBRE(fibre);
+
+	usbd_dev = usbd_init(&stm32f103_usb_driver, &dev, &config,
+			usb_strings, 2,
+			usbd_control_buffer, sizeof(usbd_control_buffer));
+	usbd_register_set_config_callback(usbd_dev, usbmidi_set_config);
 
 	while (true) {
 		usbd_poll(usbd_dev);
@@ -431,13 +483,12 @@ static fibre_t usb_task = FIBRE_VAR_INIT(usb_fibre);
 
 int main(void)
 {
-	int i;
-
-	rcc_clock_setup_in_hsi_out_48mhz();
+	rcc_clock_setup_in_hse_8mhz_out_72mhz();
 
 	rcc_periph_clock_enable(RCC_GPIOA);
 	rcc_periph_clock_enable(RCC_GPIOB);
 
+	/* LED init */
 	gpio_clear(GPIOA, GPIO4 | GPIO5 | GPIO6 | GPIO7);
 	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ,
 		      GPIO_CNF_OUTPUT_PUSHPULL, GPIO4 | GPIO5 | GPIO6 | GPIO7);
@@ -447,19 +498,11 @@ int main(void)
 	gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN,
 		      GPIO8 | GPIO9 | GPIO10 | GPIO3);
 
-	usbd_dev = usbd_init(&stm32f103_usb_driver, &dev, &config,
-			usb_strings, 2,
-			usbd_control_buffer, sizeof(usbd_control_buffer));
-	usbd_register_set_config_callback(usbd_dev, usbmidi_set_config);
-
 	time_init();
 
-	for (i = 0; i < 0x800000; i++)
-		__asm__("nop");
-
 	/* prepare the scheduler */
+	fibre_run(&wiggle_task.fibre);
 	fibre_run(&usb_task);
-	fibre_run(&button_task);
 
 	/* assert hotplug */
 	gpio_set(GPIOB, GPIO8);
