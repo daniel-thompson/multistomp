@@ -202,7 +202,7 @@ ifeq ($(DFU_ADDRESS),)
 	@printf "  FLASH   $<\n"
 	@# IMPORTANT: Don't use "resume", only "reset" will work correctly!
 	$(Q)$(OOCD) -f interface/$(OOCD_INTERFACE).cfg \
-		    -f board/$(OOCD_BOARD).cfg \
+		    -f $(OOCD_BOARD).cfg \
 		    -c "init" -c "reset init" \
 		    -c "flash write_image erase $(*).hex" \
 		    -c "reset" \
