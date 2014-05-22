@@ -19,6 +19,8 @@ OBJS += \
 	time_libopencm3.o \
 	util.o
 
-vpath %.c $(LIBRFN_DIR)/lib
+vpath %.c $(LIBRFN_DIR)/librfn
+vpath %.c $(LIBRFN_DIR)/librfn/libopencm3
+
 CPPFLAGS += -DNDEBUG
 CPPFLAGS += -I$(LIBRFN_DIR)/include
