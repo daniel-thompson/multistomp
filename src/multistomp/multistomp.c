@@ -465,7 +465,16 @@ static struct wiggle_data wiggle_task = {
 
 static int usb_fibre(fibre_t *fibre)
 {
+	static uint32_t t;
+
 	PT_BEGIN_FIBRE(fibre);
+
+	/* lower hotplug and leave enough time for the host to notice */
+	gpio_set_mode(GPIOA, GPIO_MODE_OUTPUT_2_MHZ, GPIO_CNF_OUTPUT_PUSHPULL,
+		      GPIO11 | GPIO12);
+	gpio_clear(GPIOA, GPIO11 || GPIO12);
+	t = time_now() + 10000;
+	PT_WAIT_UNTIL(fibre_timeout(t));
 
 	usbd_dev = usbd_init(&stm32f103_usb_driver, &dev, &config,
 			usb_strings, 2,
